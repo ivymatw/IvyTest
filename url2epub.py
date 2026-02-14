@@ -29,18 +29,42 @@ def parse_html(html, url):
     title = title.get_text(strip=True) if title else "Untitled"
     
     # 移除 script 和 style 標籤
-    for tag in soup(['script', 'style', 'nav', 'footer', 'header']):
+    for tag in soup(['script', 'style', 'nav', 'footer', 'header', 'aside', 'iframe']):
         tag.decompose()
     
     # 取得主要內容
-    main_content = soup.find('main') or soup.find('article') or soup.find('body')
+    main_content = soup.find('main') or soup.find('article') or soup.find('div', class_='content') or soup.find('body')
+    
+    # 提取段落文字，保持結構
+    paragraphs = []
+    if main_content:
+        # 找到所有段落元素
+        for p in main_content.find_all(['p', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'li', 'blockquote']):
+            text = p.get_text(strip=True)
+            if text and len(text) > 10:  # 過濾太短的
+                # 清理多餘空白但保持句子完整
+                text = re.sub(r'\s+', ' ', text)
+                paragraphs.append(text)
+    
+    # 如果沒找到段落，直接取全部文字
+    if not paragraphs:
+        text = main_content.get_text(strip=True) if main_content else ""
+        text = re.sub(r'\s+', ' ', text)
+        # 按句號、驚嘆號、問號來分段
+        sentences = re.split(r'([。！？.!?])', text)
+        paragraphs = []
+        for i in range(0, len(sentences)-1, 2):
+            if i+1 < len(sentences):
+                paragraphs.append(sentences[i] + sentences[i+1])
+            else:
+                paragraphs.append(sentences[i])
     
     # 清理標題中的非法字元
     title = re.sub(r'[<>:"/\\|?*]', '', title)
     
-    return title, main_content.get_text(separator='\n', strip=True) if main_content else ""
+    return title, paragraphs
 
-def create_epub(title, content, url, output_path):
+def create_epub(title, paragraphs, url, output_path):
     """建立 EPUB 檔案"""
     book = epub.EpubBook()
     
@@ -50,19 +74,25 @@ def create_epub(title, content, url, output_path):
     book.set_language('zh-TW')
     book.add_author('URL to EPUB Converter')
     
-    # 建立章節
-    chapter = epub.EpubHtml(title=title, file_name='chapter1.xhtml', lang='zh-TW')
-    chapter.content = f'''
+    # 建立章節內容
+    content_html = f'''
     <html>
     <head><title>{title}</title></head>
     <body>
         <h1>{title}</h1>
         <p>來源：<a href="{url}">{url}</a></p>
         <hr/>
-        <pre>{content}</pre>
-    </body>
-    </html>
     '''
+    
+    for i, para in enumerate(paragraphs):
+        if para.strip():
+            content_html += f'<p>{para}</p>\n'
+    
+    content_html += '</body></html>'
+    
+    # 建立章節
+    chapter = epub.EpubHtml(title=title, file_name='chapter1.xhtml', lang='zh-TW')
+    chapter.content = content_html
     book.add_item(chapter)
     
     # 建立目錄
@@ -72,9 +102,11 @@ def create_epub(title, content, url, output_path):
     
     # 加入 CSS
     style = '''
-    body { font-family: Times New Roman, serif; line-height: 1.6; }
-    h1 { text-align: center; }
-    pre { white-space: pre-wrap; word-wrap: break-word; }
+    body { font-family: Times New Roman, "PingFang TC", "Microsoft YaHei", serif; line-height: 1.8; padding: 20px; }
+    h1 { text-align: center; color: #333; }
+    p { text-indent: 2em; margin-bottom: 0.5em; text-align: justify; }
+    hr { margin: 20px 0; }
+    a { color: #0066cc; }
     '''
     nav_css = epub.EpubItem(uid="style_nav", file_name="style/nav.css", media_type="text/css", content=style)
     book.add_item(nav_css)
@@ -101,7 +133,9 @@ def main():
     
     # 解析內容
     print("正在解析內容...")
-    title, content = parse_html(html, url)
+    title, paragraphs = parse_html(html, url)
+    
+    print(f"找到 {len(paragraphs)} 個段落")
     
     # 產生輸出檔名
     if not output_file:
@@ -110,11 +144,15 @@ def main():
     
     # 建立 EPUB
     print(f"正在建立 EPUB: {output_file}")
-    create_epub(title, content, url, output_file)
+    create_epub(title, paragraphs, url, output_file)
+    
+    # 計算總字數
+    total_chars = sum(len(p) for p in paragraphs)
     
     print(f"✅ 完成！檔案已儲存: {output_file}")
     print(f"   標題: {title}")
-    print(f"   字數: {len(content)}")
+    print(f"   段落數: {len(paragraphs)}")
+    print(f"   字數: {total_chars}")
 
 if __name__ == "__main__":
     main()
